@@ -5,9 +5,9 @@ import com.example.studentbackend.repository.StudentRepository;
 import com.example.studentbackend.service.CSVService;
 import com.example.studentbackend.service.ExcelService;
 import com.example.studentbackend.service.ReportService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.File;
 import java.time.LocalDate;
@@ -18,8 +18,8 @@ import java.util.List;
 @RequestMapping("/students")
 public class StudentController {
 
-    @Autowired
-    private ExcelService excelService;
+    private final ExcelService excelService;
+    private final StudentRepository studentRepository;
 
     @Autowired
     private CSVService csvService;
@@ -27,28 +27,47 @@ public class StudentController {
     @Autowired
     private ReportService reportService;
 
-    @Autowired
-    private StudentRepository repo;
-
-    // Generate Excel with N random students
-@PostMapping("/generate-excel")
-public String generateExcel(@RequestParam int count) throws Exception {
-    List<Student> students = new ArrayList<>();
-    for (int i = 1; i <= count; i++) {
-        Student s = new Student();
-        s.setFirstName(randomString(3,8));
-        s.setLastName(randomString(3,8));
-        s.setDob(randomDate());
-        s.setStudentClass("Class" + ((i % 5) + 1));
-        s.setScore(55 + (int)(Math.random()*21));
-        students.add(s);
+    public StudentController(ExcelService excelService, StudentRepository studentRepository) {
+        this.excelService = excelService;
+        this.studentRepository = studentRepository;
     }
 
-    // Save students to DB so they get IDs
-    students = repo.saveAll(students);
+@PostMapping("/generate-excel")
+public String generateExcel(@RequestParam int count) throws Exception {
+    int batchSize = 10000; // insert 10k records at a time
+    List<Student> batch = new ArrayList<>(batchSize);
 
-    // Now generate Excel
-    File file = excelService.generateExcel(students, "data/students.xlsx");
+    // Use SXSSFWorkbook (streaming) for memory-efficient Excel generation
+    File file = excelService.createStreamingExcel("data/students.xlsx");
+
+    for (int i = 1; i <= count; i++) {
+        Student s = new Student();
+        s.setFirstName(randomString(3, 8));
+        s.setLastName(randomString(3, 8));
+        s.setDob(randomDate());
+        s.setStudentClass("Class" + ((i % 5) + 1));
+        s.setScore(55 + (int) (Math.random() * 21));
+
+        // Add to DB batch
+        batch.add(s);
+
+        // Add to Excel
+        excelService.writeStudentRow(file, s, i); // write row as it comes
+
+        if (batch.size() >= batchSize) {
+            studentRepository.saveAll(batch);
+            batch.clear();
+        }
+    }
+
+    // Save any remaining students
+    if (!batch.isEmpty()) {
+        studentRepository.saveAll(batch);
+    }
+
+    // Finalize Excel (flush and close streams)
+    excelService.finishStreamingExcel(file);
+
     return "Excel generated at: " + file.getAbsolutePath();
 }
 
@@ -70,39 +89,40 @@ public String generateExcel(@RequestParam int count) throws Exception {
     // Export reports
     @GetMapping("/report/excel")
     public String exportExcel() throws Exception {
-        List<Student> students = repo.findAll();
+        List<Student> students = studentRepository.findAll();
         reportService.exportExcel(students, "data/report.xlsx");
         return "Report Excel generated";
     }
 
     @GetMapping("/report/csv")
     public String exportCSV() throws Exception {
-        List<Student> students = repo.findAll();
+        List<Student> students = studentRepository.findAll();
         reportService.exportCSV(students, "data/report.csv");
         return "Report CSV generated";
     }
 
     @GetMapping("/report/pdf")
     public String exportPDF() throws Exception {
-        List<Student> students = repo.findAll();
+        List<Student> students = studentRepository.findAll();
         reportService.exportPDF(students, "data/report.pdf");
         return "Report PDF generated";
     }
 
     // Utilities
-    private String randomString(int min, int max) {
-        int len = min + (int)(Math.random()*(max-min+1));
+    private String randomString(int minLen, int maxLen) {
+        int len = minLen + (int) (Math.random() * (maxLen - minLen + 1));
         StringBuilder sb = new StringBuilder();
-        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        for(int i=0;i<len;i++) sb.append(chars.charAt((int)(Math.random()*chars.length())));
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        for (int i = 0; i < len; i++) {
+            sb.append(alphabet.charAt((int) (Math.random() * alphabet.length())));
+        }
         return sb.toString();
     }
 
     private LocalDate randomDate() {
-        int startYear = 2000, endYear = 2010;
-        int day = 1 + (int)(Math.random()*28);
-        int month = 1 + (int)(Math.random()*12);
-        int year = startYear + (int)(Math.random()*(endYear-startYear+1));
+        int year = 2000 + (int) (Math.random() * 11);
+        int month = 1 + (int) (Math.random() * 12);
+        int day = 1 + (int) (Math.random() * 28);
         return LocalDate.of(year, month, day);
     }
 }
