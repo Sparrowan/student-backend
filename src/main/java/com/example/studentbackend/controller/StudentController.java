@@ -8,6 +8,8 @@ import com.example.studentbackend.service.ReportService;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.io.File;
 import java.time.LocalDate;
@@ -32,45 +34,39 @@ public class StudentController {
         this.studentRepository = studentRepository;
     }
 
-@PostMapping("/generate-excel")
-public String generateExcel(@RequestParam int count) throws Exception {
-    int batchSize = 10000; // insert 10k records at a time
-    List<Student> batch = new ArrayList<>(batchSize);
+    // Generate test data + Excel file
+    @PostMapping("/generate-excel")
+    public String generateExcel(@RequestParam int count) throws Exception {
+        int batchSize = 10000;
+        List<Student> batch = new ArrayList<>(batchSize);
 
-    // Use SXSSFWorkbook (streaming) for memory-efficient Excel generation
-    File file = excelService.createStreamingExcel("data/students.xlsx");
+        File file = excelService.createStreamingExcel("data/students.xlsx");
 
-    for (int i = 1; i <= count; i++) {
-        Student s = new Student();
-        s.setFirstName(randomString(3, 8));
-        s.setLastName(randomString(3, 8));
-        s.setDob(randomDate());
-        s.setStudentClass("Class" + ((i % 5) + 1));
-        s.setScore(55 + (int) (Math.random() * 21));
+        for (int i = 1; i <= count; i++) {
+            Student s = new Student();
+            s.setFirstName(randomString(3, 8));
+            s.setLastName(randomString(3, 8));
+            s.setDob(randomDate());
+            s.setStudentClass("Class" + ((i % 5) + 1));
+            s.setScore(55 + (int) (Math.random() * 21));
 
-        // Add to DB batch
-        batch.add(s);
+            batch.add(s);
+            excelService.writeStudentRow(file, s, i);
 
-        // Add to Excel
-        excelService.writeStudentRow(file, s, i); // write row as it comes
-
-        if (batch.size() >= batchSize) {
-            studentRepository.saveAll(batch);
-            batch.clear();
+            if (batch.size() >= batchSize) {
+                studentRepository.saveAll(batch);
+                batch.clear();
+            }
         }
+
+        if (!batch.isEmpty()) {
+            studentRepository.saveAll(batch);
+        }
+
+        excelService.finishStreamingExcel(file);
+
+        return "Excel generated at: " + file.getAbsolutePath();
     }
-
-    // Save any remaining students
-    if (!batch.isEmpty()) {
-        studentRepository.saveAll(batch);
-    }
-
-    // Finalize Excel (flush and close streams)
-    excelService.finishStreamingExcel(file);
-
-    return "Excel generated at: " + file.getAbsolutePath();
-}
-
 
     // Convert Excel → CSV
     @PostMapping("/excel-to-csv")
@@ -107,6 +103,27 @@ public String generateExcel(@RequestParam int count) throws Exception {
         reportService.exportPDF(students, "data/report.pdf");
         return "Report PDF generated";
     }
+
+    // List all students with pagination
+    @GetMapping
+    public Page<Student> getAllStudents(Pageable pageable) {
+        return studentRepository.findAll(pageable);
+    }
+
+    // Search by ID
+    @GetMapping("/search/{id}")
+    public Student getStudentById(@PathVariable Long id) {
+        return studentRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Student not found with id " + id));
+    }
+
+    // Filter by class with pagination
+    @GetMapping("/class/{studentClass}")
+    public Page<Student> getStudentsByClass(@PathVariable String studentClass, Pageable pageable) {
+        return studentRepository.findByStudentClass(studentClass, pageable);
+    }
+
+    
 
     // Utilities
     private String randomString(int minLen, int maxLen) {
